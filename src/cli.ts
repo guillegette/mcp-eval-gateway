@@ -1,33 +1,52 @@
 #!/usr/bin/env node
 
 import { parseArgs } from 'node:util';
-import { runEvalProject, type RunEvalProjectOptions } from './run-eval-project';
+import { initEvalProject } from './init-eval-project';
+import { runEvalProject } from './run-eval-project';
 
-function parseCliOptions(): RunEvalProjectOptions {
+function parseCli() {
   try {
-    const { values } = parseArgs({
+    return parseArgs({
+      allowPositionals: true,
       options: {
         dir: { type: 'string' },
         'env-file': { type: 'string' },
         model: { type: 'string' },
       },
     });
-    return {
-      dir: values.dir,
-      envFile: values['env-file'],
-      model: values.model,
-    };
   } catch (error: unknown) {
     process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
     process.exit(1);
   }
 }
 
-runEvalProject(process.cwd(), parseCliOptions())
-  .then(() => {
+const { values, positionals } = parseCli();
+
+if (positionals[0] === 'init') {
+  try {
+    initEvalProject(process.cwd(), { dir: values.dir });
+    process.stdout.write(
+      `Created ${values.dir ?? 'eval'}/config.ts and ${values.dir ?? 'eval'}/tasks.yaml\n`,
+    );
     process.exit(0);
-  })
-  .catch((error: unknown) => {
+  } catch (error: unknown) {
     process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
     process.exit(1);
-  });
+  }
+} else if (typeof positionals[0] === 'string') {
+  process.stderr.write(`Unknown command: ${positionals[0]}\n`);
+  process.exit(1);
+} else {
+  runEvalProject(process.cwd(), {
+    dir: values.dir,
+    envFile: values['env-file'],
+    model: values.model,
+  })
+    .then(() => {
+      process.exit(0);
+    })
+    .catch((error: unknown) => {
+      process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+      process.exit(1);
+    });
+}
