@@ -22,6 +22,7 @@ vi.mock('../src/threshold', () => ({
 }));
 
 const previousSummary = process.env.GITHUB_STEP_SUMMARY;
+const previousMcpKey = process.env.YOUR_MCP_KEY;
 
 const evalRunResult: EvalRunResult = {
   total: 1,
@@ -44,6 +45,11 @@ afterEach(() => {
   } else {
     process.env.GITHUB_STEP_SUMMARY = previousSummary;
   }
+  if (previousMcpKey === undefined) {
+    delete process.env.YOUR_MCP_KEY;
+  } else {
+    process.env.YOUR_MCP_KEY = previousMcpKey;
+  }
 });
 
 beforeEach(() => {
@@ -60,11 +66,32 @@ function tempRoot(): string {
   return mkdtempSync(join(tmpdir(), 'mcp-eval-gateway-cli-'));
 }
 
-function writeEvalFile(rootDir: string, filename: string, contents: string): void {
-  const evalDir = join(rootDir, 'eval');
-  mkdirSync(evalDir, { recursive: true });
-  writeFileSync(join(evalDir, filename), contents);
+function writeProjectEval(
+  rootDir: string,
+  dir: string,
+  filename: string,
+  contents: string,
+): void {
+  const targetDir = join(rootDir, dir);
+  mkdirSync(targetDir, { recursive: true });
+  writeFileSync(join(targetDir, filename), contents);
 }
+
+function writeEvalFile(rootDir: string, filename: string, contents: string): void {
+  writeProjectEval(rootDir, 'eval', filename, contents);
+}
+
+const envAwareConfig = `export default {
+  model: 'gateway/x',
+  mcp: {
+    url: 'http://localhost/mcp',
+    headers: { Authorization: \`Bearer \${process.env.YOUR_MCP_KEY}\` },
+  },
+};
+`;
+
+const arrayModelConfig = `export default { model: ['gateway/a', 'gateway/b'], mcp: { url: 'http://localhost/mcp' } };
+`;
 
 function writeTasks(rootDir: string, yaml = pingTasksYaml): void {
   writeEvalFile(rootDir, 'tasks.yaml', yaml);
@@ -231,5 +258,155 @@ describe('runEvalProject', () => {
     const error = await runEvalProject(rootDir).catch((err: unknown) => err);
     expect(error).toBeInstanceOf(Error);
     expect((error as Error).message).toContain('expected');
+  });
+
+  it('loads .env from rootDir into config mcp headers', async () => {
+    delete process.env.YOUR_MCP_KEY;
+    const rootDir = tempRoot();
+    writeFileSync(join(rootDir, '.env'), 'YOUR_MCP_KEY=from-dotenv\n');
+    writeEvalFile(rootDir, 'config.mjs', envAwareConfig);
+    writeTasks(rootDir);
+
+    await runEvalProject(rootDir);
+
+    expect(vi.mocked(toolsFromMcp).mock.calls[0]?.[0]).toEqual(
+      expect.objectContaining({
+        headers: { Authorization: 'Bearer from-dotenv' },
+      }),
+    );
+  });
+
+  it('keeps an existing process.env value over .env', async () => {
+    process.env.YOUR_MCP_KEY = 'from-process';
+    const rootDir = tempRoot();
+    writeFileSync(join(rootDir, '.env'), 'YOUR_MCP_KEY=from-file\n');
+    writeEvalFile(rootDir, 'config.mjs', envAwareConfig);
+    writeTasks(rootDir);
+
+    await runEvalProject(rootDir);
+
+    expect(vi.mocked(toolsFromMcp).mock.calls[0]?.[0]).toEqual(
+      expect.objectContaining({
+        headers: { Authorization: 'Bearer from-process' },
+      }),
+    );
+  });
+
+  it('loads --env-file instead of .env', async () => {
+    delete process.env.YOUR_MCP_KEY;
+    const rootDir = tempRoot();
+    writeFileSync(join(rootDir, '.env'), 'YOUR_MCP_KEY=from-file\n');
+    writeFileSync(join(rootDir, '.env.local'), 'YOUR_MCP_KEY=from-local\n');
+    writeEvalFile(rootDir, 'config.mjs', envAwareConfig);
+    writeTasks(rootDir);
+
+    await runEvalProject(rootDir, { envFile: '.env.local' });
+
+    expect(vi.mocked(toolsFromMcp).mock.calls[0]?.[0]).toEqual(
+      expect.objectContaining({
+        headers: { Authorization: 'Bearer from-local' },
+      }),
+    );
+  });
+
+  it('rejects when --env-file is missing', async () => {
+    const rootDir = tempRoot();
+    writeEvalFile(
+      rootDir,
+      'config.mjs',
+      `export default { model: 'gateway/x', mcp: { url: 'http://localhost/mcp' } };\n`,
+    );
+    writeTasks(rootDir);
+
+    const error = await runEvalProject(rootDir, { envFile: 'missing.env' }).catch(
+      (err: unknown) => err,
+    );
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toContain('missing.env');
+  });
+
+  it('loads config and tasks from --dir', async () => {
+    const rootDir = tempRoot();
+    writeProjectEval(
+      rootDir,
+      'src/eval',
+      'config.mjs',
+      `export default { model: 'gateway/from-dir', mcp: { url: 'http://localhost/mcp' } };\n`,
+    );
+    writeProjectEval(rootDir, 'src/eval', 'tasks.yaml', pingTasksYaml);
+
+    await runEvalProject(rootDir, { dir: 'src/eval' });
+
+    expect(runEvals).toHaveBeenCalled();
+    expect(vi.mocked(runEvals).mock.calls[0]?.[0]?.model).toBe('gateway/from-dir');
+  });
+
+  it('rejects when config is missing under --dir', async () => {
+    const rootDir = tempRoot();
+    mkdirSync(join(rootDir, 'src/eval'), { recursive: true });
+
+    const error = await runEvalProject(rootDir, { dir: 'src/eval' }).catch(
+      (err: unknown) => err,
+    );
+    expect(error).toBeInstanceOf(Error);
+    const message = (error as Error).message;
+    expect(message).toContain('src/eval');
+    expect(message).toContain('config');
+  });
+
+  it('runs every model in a config array', async () => {
+    const rootDir = tempRoot();
+    writeEvalFile(rootDir, 'config.mjs', arrayModelConfig);
+    writeTasks(rootDir);
+
+    await runEvalProject(rootDir);
+
+    expect(toolsFromMcp).toHaveBeenCalledTimes(1);
+    expect(runEvals).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(runEvals).mock.calls[0]?.[0]?.model).toBe('gateway/a');
+    expect(vi.mocked(runEvals).mock.calls[1]?.[0]?.model).toBe('gateway/b');
+    expect(writeGitHubSummary).toHaveBeenCalledTimes(2);
+    expect(writeGitHubSummary).toHaveBeenNthCalledWith(1, evalRunResult);
+    expect(writeGitHubSummary).toHaveBeenNthCalledWith(2, evalRunResult);
+    expect(assertEvalResult).toHaveBeenCalledTimes(2);
+    expect(close).toHaveBeenCalledTimes(1);
+  });
+
+  it('runs only the --model when the config lists several', async () => {
+    const rootDir = tempRoot();
+    writeEvalFile(rootDir, 'config.mjs', arrayModelConfig);
+    writeTasks(rootDir);
+
+    await runEvalProject(rootDir, { model: 'gateway/a' });
+
+    expect(runEvals).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(runEvals).mock.calls[0]?.[0]?.model).toBe('gateway/a');
+  });
+
+  it('runs --model even when it is not in the config list', async () => {
+    const rootDir = tempRoot();
+    writeEvalFile(
+      rootDir,
+      'config.mjs',
+      `export default { model: 'gateway/x', mcp: { url: 'http://localhost/mcp' } };\n`,
+    );
+    writeTasks(rootDir);
+
+    await runEvalProject(rootDir, { model: 'gateway/y' });
+
+    expect(runEvals).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(runEvals).mock.calls[0]?.[0]?.model).toBe('gateway/y');
+  });
+
+  it('closes the session after a later model fails', async () => {
+    const rootDir = tempRoot();
+    writeEvalFile(rootDir, 'config.mjs', arrayModelConfig);
+    writeTasks(rootDir);
+    vi.mocked(runEvals)
+      .mockResolvedValueOnce(evalRunResult)
+      .mockRejectedValueOnce(new Error('model failed'));
+
+    await expect(runEvalProject(rootDir)).rejects.toThrow(/model failed/);
+    expect(close).toHaveBeenCalledTimes(1);
   });
 });

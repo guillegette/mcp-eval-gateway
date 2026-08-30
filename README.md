@@ -18,15 +18,16 @@ npm install --save-dev @ai-sdk/anthropic
 
 ## Quick start
 
-Add two files under `eval/`, then run the CLI.
-
-1. `eval/config.ts` (or `.mts` / `.mjs` / `.js`):
+1. `eval/config.ts` (or `.mts` / `.mjs` / `.js`) — default export with `model` as a string **or** an array of strings (or a LanguageModel):
 
 ```ts
 import { POST } from '../app/mcp/route.js';
 
 export default {
-  model: 'gateway/anthropic/claude-sonnet-4-6',
+  model: [
+    'gateway/anthropic/claude-sonnet-4-6',
+    'gateway/openai/gpt-5.2',
+  ],
   threshold: 0.8,
   mcp: {
     url: 'http://localhost/mcp',
@@ -36,7 +37,7 @@ export default {
 };
 ```
 
-`mcp` is the same options object as `toolsFromMcp`: `{ url, headers? }`, `{ url, fetch, headers? }`, or `{ transport }`. `YOUR_MCP_KEY` is whatever your MCP server expects — not a package env var.
+`mcp` is the same options object as `toolsFromMcp`. `YOUR_MCP_KEY` is whatever your MCP server expects — not a package env var.
 
 2. `eval/tasks.yaml` — a top-level array:
 
@@ -49,13 +50,27 @@ export default {
 
 Each item has `name`, `prompt`, `expected`, and an optional `required` boolean.
 
-3. From the project root (the directory that contains `eval/`):
+3. From the directory you want as the project root (the process cwd):
 
 ```bash
 npx mcp-eval-gateway@0.1.0
 ```
 
-Pass the same env vars your model and `eval/config` need, for example `AI_GATEWAY_API_KEY` and `YOUR_MCP_KEY`. The process exits `1` below `threshold` or when a `required` task fails.
+The runner loads `.env` from that directory when the file exists, then loads `eval/config.*` + `eval/tasks.yaml`. It runs every `model` in the config, writes reports, and exits `1` if any model fails `threshold` or a `required` task. Put `AI_GATEWAY_API_KEY` and `YOUR_MCP_KEY` in `.env` locally.
+
+## CLI
+
+Each flag takes one value.
+
+| Flag | Maps to | Default / behavior |
+| --- | --- | --- |
+| `--dir <path>` | folder under cwd that contains `config.*` and `tasks.yaml` | `eval` |
+| `--env-file <path>` | env file to load instead of `.env` | load `.env` if present |
+| `--model <id>` | run this model only, even if it is not in the config list | run every `model` in the config |
+
+```bash
+npx mcp-eval-gateway@0.1.0 --dir src/eval --env-file .env.local --model gateway/anthropic/claude-sonnet-4-6
+```
 
 ## GitHub Actions
 
@@ -68,11 +83,11 @@ After checkout, setup-node 22, and `npm ci`, add this eval step (pin the version
     YOUR_MCP_KEY: ${{ secrets.YOUR_MCP_KEY }}
 ```
 
-The runner writes the markdown report to the Actions job summary when GitHub provides it, and fails the job below `threshold` or when a `required` task fails.
+The job can inject env instead of a `.env` file; already-set env vars are not overwritten by `.env`. The runner writes the markdown report to the Actions job summary when GitHub provides it, and fails the job below `threshold` or when a `required` task fails.
 
 ## Models
 
-`runEvals` accepts a `LanguageModel` instance or a string of the form `<provider>/<id>` (split on the first `/` only):
+`runEvals` accepts a `LanguageModel` instance or a string of the form `<provider>/<id>` (split on the first `/` only). Config `model` may be that value or an array of them; CLI `--model` selects one id to run.
 
 
 | Prefix       | Example                                             | Package                  | Credentials          |
@@ -89,6 +104,7 @@ Provider packages are optional peer dependencies — install only the prefix you
 
 For a script or vitest file, import from `mcp-eval-gateway`:
 
+- `runEvalProject(rootDir, { dir?, envFile?, model? })`
 - `runEvals({ model, tools, tasks, maxSteps?, systemPrompt?, scorer? })`
 - `toolsFromMcp({ url, fetch?, headers? } | { transport })`
 - `assertEvalResult(result, { threshold? })`
