@@ -1,5 +1,8 @@
 # mcp-eval-gateway
 
+[![npm version](https://img.shields.io/npm/v/mcp-eval-gateway.svg)](https://www.npmjs.com/package/mcp-eval-gateway)
+[![CI](https://github.com/guillegette/mcp-eval-gateway/actions/workflows/ci.yml/badge.svg)](https://github.com/guillegette/mcp-eval-gateway/actions/workflows/ci.yml)
+
 Run LLM tool-use evaluations against MCP servers with the [Vercel AI SDK](https://ai-sdk.dev/). The agent loop, tagged response extraction, scoring, and Markdown report follow the pattern in Anthropic's [tool evaluation cookbook](https://github.com/anthropics/anthropic-cookbook).
 
 ## Get started
@@ -255,6 +258,12 @@ The following exports are available:
 ### toolsFromMcp
 
 `toolsFromMcp` opens an MCP session and returns `{ tools, close }` for `runEvals`. The `mcp` object in `eval/config.ts` is the same options object: pass `url` with optional `fetch` and `headers`, or pass a `transport` from the MCP SDK (stdio, SSE, or custom). The CLI already calls `toolsFromMcp` for you.
+
+What shipped in each version is on [Releases](https://github.com/guillegette/mcp-eval-gateway/releases).
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md). To report a vulnerability, see [SECURITY.md](SECURITY.md).
 
 ## License
 
