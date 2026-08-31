@@ -20,12 +20,14 @@ export type RunEvalProjectOptions = {
   dir?: string;
   envFile?: string;
   model?: string;
+  judgeModel?: string;
 };
 
 type EvalProjectModel = string | LanguageModel;
 
 type EvalProjectConfig = {
   model: EvalProjectModel | EvalProjectModel[];
+  judgeModel?: string;
   threshold?: number;
   mcp: ToolsFromMcpOptions;
 };
@@ -85,6 +87,17 @@ function requireStringField(
   return value;
 }
 
+function optionalStringField(
+  item: Record<string, unknown>,
+  field: string,
+  relativeDir: string,
+): string | undefined {
+  if (item[field] === undefined) {
+    return undefined;
+  }
+  return requireStringField(item, field, relativeDir);
+}
+
 function loadTasks(evalDir: string, relativeDir: string): EvalTask[] {
   const tasksPath = join(evalDir, 'tasks.yaml');
   if (!existsSync(tasksPath)) {
@@ -101,10 +114,18 @@ function loadTasks(evalDir: string, relativeDir: string): EvalTask[] {
       throw new Error(`${relativeDir}/tasks.yaml item is missing name`);
     }
     const record = item as Record<string, unknown>;
+    const expected = optionalStringField(record, 'expected', relativeDir);
+    const judge = optionalStringField(record, 'judge', relativeDir);
+    if ((expected === undefined) === (judge === undefined)) {
+      throw new Error(
+        `${relativeDir}/tasks.yaml item must set exactly one of expected or judge`,
+      );
+    }
     return {
       name: requireStringField(record, 'name', relativeDir),
       prompt: requireStringField(record, 'prompt', relativeDir),
-      expected: requireStringField(record, 'expected', relativeDir),
+      ...(expected !== undefined ? { expected } : {}),
+      ...(judge !== undefined ? { judge } : {}),
       required: record.required === true,
     };
   });
@@ -119,6 +140,7 @@ export async function runEvalProject(
   const relativeDir = options?.dir ?? 'eval';
   const evalDir = join(rootDir, relativeDir);
   const config = await loadConfig(resolveConfigPath(evalDir, relativeDir));
+  const judgeModel = options?.judgeModel ?? process.env.MCP_EVAL_JUDGE_MODEL ?? config.judgeModel;
   const tasks = loadTasks(evalDir, relativeDir);
   const models = options?.model !== undefined
     ? [options.model]
@@ -138,6 +160,7 @@ export async function runEvalProject(
           model: entry,
           tools: session.tools,
           tasks,
+          judgeModel,
         }),
       );
     }

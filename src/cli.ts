@@ -12,6 +12,7 @@ function parseCli() {
         dir: { type: 'string' },
         'env-file': { type: 'string' },
         model: { type: 'string' },
+        'judge-model': { type: 'string' },
       },
     });
   } catch (error: unknown) {
@@ -41,6 +42,7 @@ if (positionals[0] === 'init') {
     dir: values.dir,
     envFile: values['env-file'],
     model: values.model,
+    judgeModel: values['judge-model'],
   })
     .then(() => {
       process.exit(0);

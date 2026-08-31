@@ -2,6 +2,9 @@ import { appendFileSync } from 'node:fs';
 import type { EvalRunResult, TaskResult } from './types';
 
 function describeFailure(task: TaskResult): string {
+  if (task.judge !== null) {
+    return `${task.name} (expected outcome "${task.judge}", judge: ${task.judgeReason ?? 'N/A'})`;
+  }
   return `${task.name} (expected "${task.expected}", got "${task.actual}")`;
 }
 

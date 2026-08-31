@@ -1,5 +1,6 @@
 import { generateText, isStepCount, type LanguageModel, type ToolSet } from 'ai';
 import { EVALUATION_PROMPT } from './evaluation-prompt';
+import { runJudge, type TranscriptEntry } from './judge';
 import { renderReport } from './report';
 import { resolveModel } from './resolve-model';
 import type { EvalRunResult, EvalTask, TaskResult, ToolMetrics } from './types';
@@ -11,6 +12,7 @@ export type RunEvalsOptions = {
   maxSteps?: number;
   systemPrompt?: string;
   scorer?: (actual: string | null, task: EvalTask) => number;
+  judgeModel?: string | LanguageModel;
 };
 
 const defaultScorer = (actual: string | null, task: EvalTask): number =>
@@ -54,13 +56,55 @@ function wrapTools(tools: ToolSet, metrics: ToolMetrics): ToolSet {
   return wrapped;
 }
 
+function hasExpected(task: EvalTask): boolean {
+  return task.expected !== undefined;
+}
+
+function hasJudge(task: EvalTask): boolean {
+  return task.judge !== undefined;
+}
+
+function transcriptFromSteps(
+  steps: Array<{
+    toolCalls: Array<{ toolCallId: string; toolName: string; input: unknown }>;
+    toolResults: Array<{ toolCallId: string; output: unknown }>;
+  }>,
+): TranscriptEntry[] {
+  return steps.flatMap((step) =>
+    step.toolCalls.map((toolCall) => {
+      const toolResult = step.toolResults.find(
+        (result) => result.toolCallId === toolCall.toolCallId,
+      );
+      return {
+        tool: toolCall.toolName,
+        input: toolCall.input,
+        output: toolResult?.output,
+      };
+    }),
+  );
+}
+
 export async function runEvals(options: RunEvalsOptions): Promise<EvalRunResult> {
   if (options.tasks.length === 0) {
     throw new Error('No tasks ran');
   }
 
+  for (const task of options.tasks) {
+    if (hasExpected(task) === hasJudge(task)) {
+      throw new Error(`Task "${task.name}" must set exactly one of expected or judge`);
+    }
+  }
+
   const model =
     typeof options.model === 'string' ? await resolveModel(options.model) : options.model;
+
+  const needsJudge = options.tasks.some((task) => hasJudge(task) && task.scorer === undefined);
+  const resolvedJudgeModel =
+    !needsJudge || options.judgeModel === undefined
+      ? model
+      : typeof options.judgeModel === 'string'
+        ? await resolveModel(options.judgeModel)
+        : options.judgeModel;
 
   const results: TaskResult[] = [];
 
@@ -81,8 +125,23 @@ export async function runEvals(options: RunEvalsOptions): Promise<EvalRunResult>
 
     const durationMs = performance.now() - started;
     const actual = extractTag(generated.text, 'response');
-    const scorer = task.scorer ?? options.scorer ?? defaultScorer;
-    const score = scorer(actual, task);
+    const transcript = transcriptFromSteps(generated.steps);
+
+    let score: number;
+    let judgeReason: string | null = null;
+    if (hasJudge(task) && task.scorer === undefined) {
+      const judged = await runJudge({
+        model: resolvedJudgeModel,
+        task,
+        transcript,
+        actual,
+      });
+      score = judged.score;
+      judgeReason = judged.reason;
+    } else {
+      const scorer = task.scorer ?? options.scorer ?? defaultScorer;
+      score = scorer(actual, task);
+    }
     const passed = score >= 1;
     const numToolCalls = Object.values(toolMetrics).reduce(
       (sum, metric) => sum + metric.count,
@@ -92,7 +151,9 @@ export async function runEvals(options: RunEvalsOptions): Promise<EvalRunResult>
     results.push({
       name: task.name,
       prompt: task.prompt,
-      expected: task.expected,
+      expected: task.expected ?? null,
+      judge: task.judge ?? null,
+      judgeReason,
       actual,
       score,
       passed,
