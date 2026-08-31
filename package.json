@@ -1,6 +1,6 @@
 {
   "name": "mcp-eval-gateway",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "Run LLM tool-use evaluations against MCP servers with the Vercel AI SDK",
   "type": "module",
   "main": "./dist/index.cjs",
@@ -32,6 +32,23 @@
   "publishConfig": {
     "access": "public"
   },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/guillegette/mcp-eval-gateway.git"
+  },
+  "keywords": [
+    "mcp",
+    "model context protocol",
+    "eval",
+    "evaluation",
+    "llm",
+    "ai-sdk"
+  ],
+  "author": "Guillermo Gette (https://github.com/guillegette)",
+  "bugs": {
+    "url": "https://github.com/guillegette/mcp-eval-gateway/issues"
+  },
+  "homepage": "https://github.com/guillegette/mcp-eval-gateway#readme",
   "license": "MIT",
   "engines": {
     "node": ">=22"
