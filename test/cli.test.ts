@@ -23,6 +23,7 @@ vi.mock('../src/threshold', () => ({
 
 const previousSummary = process.env.GITHUB_STEP_SUMMARY;
 const previousMcpKey = process.env.YOUR_MCP_KEY;
+const previousJudgeModel = process.env.MCP_EVAL_JUDGE_MODEL;
 
 const evalRunResult: EvalRunResult = {
   total: 1,
@@ -49,6 +50,11 @@ afterEach(() => {
     delete process.env.YOUR_MCP_KEY;
   } else {
     process.env.YOUR_MCP_KEY = previousMcpKey;
+  }
+  if (previousJudgeModel === undefined) {
+    delete process.env.MCP_EVAL_JUDGE_MODEL;
+  } else {
+    process.env.MCP_EVAL_JUDGE_MODEL = previousJudgeModel;
   }
 });
 
@@ -258,6 +264,7 @@ describe('runEvalProject', () => {
     const error = await runEvalProject(rootDir).catch((err: unknown) => err);
     expect(error).toBeInstanceOf(Error);
     expect((error as Error).message).toContain('expected');
+    expect((error as Error).message).toContain('judge');
   });
 
   it('loads .env from rootDir into config mcp headers', async () => {
@@ -408,5 +415,110 @@ describe('runEvalProject', () => {
 
     await expect(runEvalProject(rootDir)).rejects.toThrow(/model failed/);
     expect(close).toHaveBeenCalledTimes(1);
+  });
+
+  it('loads a yaml task with judge', async () => {
+    const rootDir = tempRoot();
+    writeEvalFile(
+      rootDir,
+      'config.mjs',
+      `export default { model: 'gateway/x', mcp: { url: 'http://localhost/mcp' } };\n`,
+    );
+    writeTasks(
+      rootDir,
+      `- name: onboard
+  prompt: set up a project
+  judge: a space is created
+`,
+    );
+
+    await runEvalProject(rootDir);
+
+    const task = vi.mocked(runEvals).mock.calls[0]?.[0]?.tasks[0];
+    expect(task?.judge).toBe('a space is created');
+    expect(task?.expected === undefined || task?.expected === null).toBe(true);
+  });
+
+  it('rejects a yaml item that has both expected and judge', async () => {
+    const rootDir = tempRoot();
+    writeEvalFile(
+      rootDir,
+      'config.mjs',
+      `export default { model: 'gateway/x', mcp: { url: 'http://localhost/mcp' } };\n`,
+    );
+    writeTasks(
+      rootDir,
+      `- name: ping
+  prompt: hi
+  expected: pong
+  judge: the agent replies pong
+`,
+    );
+
+    const error = await runEvalProject(rootDir).catch((err: unknown) => err);
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toMatch(/exactly one/);
+  });
+
+  it('passes config judgeModel to runEvals', async () => {
+    delete process.env.MCP_EVAL_JUDGE_MODEL;
+    const rootDir = tempRoot();
+    writeEvalFile(
+      rootDir,
+      'config.mjs',
+      `export default { model: 'gateway/x', judgeModel: 'gateway/judge-from-config', mcp: { url: 'http://localhost/mcp' } };
+`,
+    );
+    writeTasks(rootDir);
+
+    await runEvalProject(rootDir);
+
+    expect(runEvals).toHaveBeenCalledWith(
+      expect.objectContaining({
+        judgeModel: 'gateway/judge-from-config',
+      }),
+    );
+  });
+
+  it('env MCP_EVAL_JUDGE_MODEL beats config judgeModel', async () => {
+    process.env.MCP_EVAL_JUDGE_MODEL = 'gateway/judge-from-env';
+    const rootDir = tempRoot();
+    writeEvalFile(
+      rootDir,
+      'config.mjs',
+      `export default { model: 'gateway/x', judgeModel: 'gateway/judge-from-config', mcp: { url: 'http://localhost/mcp' } };
+`,
+    );
+    writeTasks(rootDir);
+
+    await runEvalProject(rootDir);
+
+    expect(runEvals).toHaveBeenCalledWith(
+      expect.objectContaining({
+        judgeModel: 'gateway/judge-from-env',
+      }),
+    );
+  });
+
+  it('options.judgeModel beats env and config', async () => {
+    process.env.MCP_EVAL_JUDGE_MODEL = 'gateway/judge-from-env';
+    const rootDir = tempRoot();
+    writeEvalFile(
+      rootDir,
+      'config.mjs',
+      `export default { model: 'gateway/x', judgeModel: 'gateway/judge-from-config', mcp: { url: 'http://localhost/mcp' } };
+`,
+    );
+    writeTasks(rootDir);
+
+    await runEvalProject(rootDir, {
+      judgeModel: 'gateway/judge-from-cli',
+    });
+
+    expect(runEvals).toHaveBeenCalledWith(
+      expect.objectContaining({
+        judgeModel: 'gateway/judge-from-cli',
+      }),
+    );
   });
 });

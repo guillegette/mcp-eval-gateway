@@ -24,17 +24,26 @@ export function renderReport(results: TaskResult[]): string {
 
   const sections = results.map((result) => {
     const actual = result.actual ?? 'N/A';
+    const expectedBlock =
+      result.judge !== null
+        ? `**Expected Outcome**: ${result.judge}`
+        : `**Ground Truth Response**: ${result.expected ?? 'N/A'}`;
+    const judgeReasonBlock =
+      result.judge !== null
+        ? [`**Judge Reason**: ${result.judgeReason ?? 'N/A'}`, '']
+        : [];
     return [
       `### Task: ${result.name}`,
       '',
       `**Prompt**: ${result.prompt}`,
       '',
-      `**Ground Truth Response**: ${result.expected}`,
+      expectedBlock,
       '',
       `**Actual Response**: ${actual}`,
       '',
       `**Correct**: ${result.passed ? '✅' : '❌'}`,
       '',
+      ...judgeReasonBlock,
       `**Duration**: ${(result.durationMs / 1000).toFixed(2)}s`,
       '',
       `**Tool Calls**:`,

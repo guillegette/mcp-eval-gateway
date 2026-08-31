@@ -117,7 +117,12 @@ export default {
 
 ## Write the tasks
 
-`eval/tasks.yaml` lists the tasks the model must complete against your server's tools. Each task must include `name`, `prompt`, and `expected`. The runner sends `prompt` to the model with the MCP tools available and scores the final response against `expected`. Set `required` to `true` when a failed task must fail the run.
+`eval/tasks.yaml` lists the tasks the model must complete against your server's tools. Each task must include `name`, `prompt`, and exactly one of `expected` or `judge`:
+
+- `expected`: the runner scores the final `<response>` by exact string match.
+- `judge`: a plain-English expected outcome. A judge model reviews the run's tool calls and scores whether that outcome was met.
+
+Set `required` to `true` when a failed task must fail the run.
 
 ```yaml
 - name: ping
@@ -127,6 +132,9 @@ export default {
 - name: search-empty
   prompt: Search for a document called "does not exist" and report what you find
   expected: No matching document
+- name: onboard
+  prompt: Set up a project for onboarding
+  judge: A new space is created and three tasks are created in it
 ```
 
 ## Run the evals
@@ -155,6 +163,7 @@ Each flag takes one value. The following table describes the flags:
 | `--dir DIR` | Folder under the project root that contains `config.*` and `tasks.yaml` | `eval` |
 | `--env-file ENV_FILE` | Env file to load instead of `.env` | Load `.env` when that file exists |
 | `--model MODEL` | Run this model only, even if it is not in the config list | Run every `model` in the config |
+| `--judge-model MODEL` | Model that scores tasks with `judge` | The model under evaluation |
 
 The following command evaluates one model and loads config from `src/eval`:
 
@@ -166,6 +175,10 @@ npx mcp-eval-gateway \
 ```
 
 If `--env-file` points at a missing file, the runner exits with an error. Values already set in the process environment are not overwritten when an env file is loaded.
+
+### Judge tasks
+
+Tasks that set `judge` are scored by a judge model that reads the task prompt, the tool-call transcript, and the agent's final response. The runner resolves the judge model in this order: the `--judge-model` flag, the `MCP_EVAL_JUDGE_MODEL` environment variable, `judgeModel` in the eval config, then the model under evaluation.
 
 ## Choose models
 

@@ -24,6 +24,8 @@ function task(overrides: Partial<TaskResult> & Pick<TaskResult, 'name'>): TaskRe
   return {
     prompt: overrides.name,
     expected: 'ok',
+    judge: null,
+    judgeReason: null,
     actual: passed ? 'ok' : 'no',
     score: passed ? 1 : 0,
     passed,
@@ -93,6 +95,29 @@ describe('assertEvalResult', () => {
   it('throws when no tasks ran, even without a threshold', () => {
     expect(() => assertEvalResult(evalResult([]))).toThrow(/No tasks ran/);
     expect(() => assertEvalResult(evalResult([]), { threshold: 0.8 })).toThrow(/No tasks ran/);
+  });
+
+  it('describes a failed judge task with the rubric and reason', () => {
+    const result = evalResult([
+      task({
+        name: 'onboard',
+        passed: false,
+        required: true,
+        expected: null,
+        judge: 'A new space is created',
+        judgeReason: 'no create tool was called',
+      }),
+    ]);
+    let message = '';
+    try {
+      assertEvalResult(result);
+    } catch (err) {
+      message = err instanceof Error ? err.message : String(err);
+    }
+    expect(message).toContain('onboard');
+    expect(message).toContain('A new space is created');
+    expect(message).toContain('no create tool was called');
+    expect(message).not.toContain('expected "null"');
   });
 });
 
