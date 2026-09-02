@@ -137,6 +137,34 @@ Set `required` to `true` when a failed task must fail the run.
   judge: A new space is created and three tasks are created in it
 ```
 
+### Generate tasks with an agent
+
+Good tasks measure whether the model picks the right tools with the right arguments, not whether it knows your API. You can delegate the drafting to a coding agent that has access to your MCP server's source. Give it the following prompt:
+
+```text
+Write eval tasks in eval/tasks.yaml for the MCP server in this repo.
+Each task is a prompt given to an agent connected to the server, scored on the tool-call transcript.
+A task has `name`, `prompt`, and exactly one of `expected` (exact string match) or `judge` (a plain-English outcome that a judge model checks against the transcript).
+
+Read the server's tools first, then follow these rules:
+
+- Write prompts the way a real user of the product would type them. Product vocabulary only — never tool names, parameter names, or raw internal IDs.
+- Identifiers, codes, and URLs in prompts must match the product's real formats. Synthetic-looking values distort model behavior.
+- Put all precision in the judge and keep prompts natural. Use `expected` only when there is one deterministic short answer.
+- Score tool and argument choice, not the API. Don't ask the agent to verify its own writes; the judge sees the tool calls.
+- If a prompt names data that might not exist, judge both branches: act on what the lookups found, or clearly report that it doesn't exist.
+- Add a few tasks with realistic but nonexistent identifiers, judged on an honest "not found" with nothing invented.
+- Cover every tool through realistic scenarios, favoring multi-step workflows. Cover reads with genuine questions, not verification chores.
+- The agent can't ask questions, so include the specifics a user would give.
+- Writes are real: the evals run against a live workspace.
+```
+
+Expect to iterate after the first run. Judge explanations name what failed and why, and they separate model mistakes from server bugs: a run where the model picks the right tool but every call fails points at the server, not the task. To rerun a single task while you tune it, filter by name and print its transcript:
+
+```bash
+npx mcp-eval-gateway --task task-name --limit 1 --verbose
+```
+
 ## Run the evals
 
 The default config uses a `gateway/` model (see [Choose models](#choose-models)), which needs `AI_GATEWAY_API_KEY`. Store it in a `.env` file in the project root, next to any values your config reads:
