@@ -13,6 +13,8 @@ export type RunEvalsOptions = {
   systemPrompt?: string;
   scorer?: (actual: string | null, task: EvalTask) => number;
   judgeModel?: string | LanguageModel;
+  onTaskStart?: (task: EvalTask, index: number, total: number) => void;
+  onTaskEnd?: (result: TaskResult, index: number, total: number) => void;
 };
 
 const defaultScorer = (actual: string | null, task: EvalTask): number =>
@@ -107,13 +109,16 @@ export async function runEvals(options: RunEvalsOptions): Promise<EvalRunResult>
         : options.judgeModel;
 
   const results: TaskResult[] = [];
+  const totalTasks = options.tasks.length;
 
-  for (const task of options.tasks) {
+  for (const [index, task] of options.tasks.entries()) {
     await task.setup?.();
 
     const toolMetrics: ToolMetrics = {};
     const wrappedTools = wrapTools(options.tools, toolMetrics);
     const started = performance.now();
+
+    options.onTaskStart?.(task, index, totalTasks);
 
     const generated = await generateText({
       model,
@@ -148,7 +153,7 @@ export async function runEvals(options: RunEvalsOptions): Promise<EvalRunResult>
       0,
     );
 
-    results.push({
+    const taskResult: TaskResult = {
       name: task.name,
       prompt: task.prompt,
       expected: task.expected ?? null,
@@ -163,7 +168,10 @@ export async function runEvals(options: RunEvalsOptions): Promise<EvalRunResult>
       numToolCalls,
       summary: extractTag(generated.text, 'summary'),
       feedback: extractTag(generated.text, 'feedback'),
-    });
+      transcript,
+    };
+    options.onTaskEnd?.(taskResult, index, totalTasks);
+    results.push(taskResult);
   }
 
   const total = results.length;

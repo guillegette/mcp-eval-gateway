@@ -152,11 +152,13 @@ Then start the runner from the project root:
 npx mcp-eval-gateway
 ```
 
-The runner loads `.env` when that file exists, then loads the config and `eval/tasks.yaml`. It picks the first of `config.ts`, `config.mts`, `config.mjs`, or `config.js` that exists. It evaluates every `model` in the config in one MCP session, writes a Markdown report, and exits with status 1 if any model fails `threshold` or a `required` task.
+The runner loads `.env` when that file exists, then loads the config and `eval/tasks.yaml`. It picks the first of `config.ts`, `config.mts`, `config.mjs`, or `config.js` that exists. It evaluates every `model` in the config in one MCP session and exits with status 1 if any model fails `threshold` or a `required` task.
+
+The runner prints progress lines as it goes: a header with the model, MCP URL, and task count; a connecting line; `RUN` then `PASS` or `FAIL` for each task; and a summary at the end. When GitHub provides `GITHUB_STEP_SUMMARY`, the runner still writes the Markdown report there.
 
 ## CLI flags
 
-Each flag takes one value. The following table describes the flags:
+The following table describes the flags:
 
 | Flag | Purpose | Default |
 | --- | --- | --- |
@@ -164,6 +166,9 @@ Each flag takes one value. The following table describes the flags:
 | `--env-file ENV_FILE` | Env file to load instead of `.env` | Load `.env` when that file exists |
 | `--model MODEL` | Run this model only, even if it is not in the config list | Run every `model` in the config |
 | `--judge-model MODEL` | Model that scores tasks with `judge` | The model under evaluation |
+| `--task NAME` | Run tasks whose `name` contains this substring. Repeat the flag to OR patterns. | Run every task |
+| `--limit N` | Run the first N tasks after `--task` filtering, in yaml order | Run every remaining task |
+| `--verbose` | After each task's `PASS`/`FAIL` line, print that task's tool transcript (tool name, input, output) | Off |
 
 The following command evaluates one model and loads config from `src/eval`:
 
@@ -172,6 +177,12 @@ npx mcp-eval-gateway \
   --dir src/eval \
   --env-file .env.local \
   --model gateway/anthropic/claude-sonnet-4-6
+```
+
+To run one matching task and print its tool transcript:
+
+```bash
+npx mcp-eval-gateway --task task-name --limit 1 --verbose
 ```
 
 If `--env-file` points at a missing file, the runner exits with an error. Values already set in the process environment are not overwritten when an env file is loaded.

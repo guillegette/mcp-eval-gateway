@@ -1,54 +1,53 @@
 #!/usr/bin/env node
 
-import { parseArgs } from 'node:util';
 import { initEvalProject } from './init-eval-project';
+import { parseEvalCli } from './parse-cli';
+import { createReporter } from './reporter';
 import { runEvalProject } from './run-eval-project';
 
-function parseCli() {
-  try {
-    return parseArgs({
-      allowPositionals: true,
-      options: {
-        dir: { type: 'string' },
-        'env-file': { type: 'string' },
-        model: { type: 'string' },
-        'judge-model': { type: 'string' },
-      },
-    });
-  } catch (error: unknown) {
-    process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
-    process.exit(1);
-  }
+function fail(error: unknown): never {
+  process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+  process.exit(1);
 }
 
-const { values, positionals } = parseCli();
+let parsed;
+try {
+  parsed = parseEvalCli(process.argv.slice(2));
+} catch (error: unknown) {
+  fail(error);
+}
 
-if (positionals[0] === 'init') {
+if (parsed.command === 'unknown') {
+  process.stderr.write(`Unknown command: ${parsed.positional}\n`);
+  process.exit(1);
+}
+
+if (parsed.command === 'init') {
   try {
-    initEvalProject(process.cwd(), { dir: values.dir });
+    initEvalProject(process.cwd(), { dir: parsed.dir });
     process.stdout.write(
-      `Created ${values.dir ?? 'eval'}/config.ts and ${values.dir ?? 'eval'}/tasks.yaml\n`,
+      `Created ${parsed.dir ?? 'eval'}/config.ts and ${parsed.dir ?? 'eval'}/tasks.yaml\n`,
     );
     process.exit(0);
   } catch (error: unknown) {
-    process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
-    process.exit(1);
+    fail(error);
   }
-} else if (typeof positionals[0] === 'string') {
-  process.stderr.write(`Unknown command: ${positionals[0]}\n`);
-  process.exit(1);
-} else {
-  runEvalProject(process.cwd(), {
-    dir: values.dir,
-    envFile: values['env-file'],
-    model: values.model,
-    judgeModel: values['judge-model'],
-  })
-    .then(() => {
-      process.exit(0);
-    })
-    .catch((error: unknown) => {
-      process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
-      process.exit(1);
-    });
 }
+
+runEvalProject(process.cwd(), {
+  dir: parsed.dir,
+  envFile: parsed.envFile,
+  model: parsed.model,
+  judgeModel: parsed.judgeModel,
+  task: parsed.task,
+  limit: parsed.limit,
+  reporter: createReporter((chunk) => process.stdout.write(chunk), {
+    verbose: parsed.verbose === true,
+  }),
+})
+  .then(() => {
+    process.exit(0);
+  })
+  .catch((error: unknown) => {
+    fail(error);
+  });

@@ -5,7 +5,9 @@ import { extname, isAbsolute, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { parse } from 'yaml';
 import { toolsFromMcp, type ToolsFromMcpOptions } from './mcp-tools';
+import type { EvalReporter } from './reporter';
 import { runEvals } from './run-evals';
+import { selectTasks } from './select-tasks';
 import { assertEvalResult, writeGitHubSummary } from './threshold';
 import type { EvalRunResult, EvalTask } from './types';
 
@@ -21,6 +23,9 @@ export type RunEvalProjectOptions = {
   envFile?: string;
   model?: string;
   judgeModel?: string;
+  task?: string[];
+  limit?: number;
+  reporter?: EvalReporter;
 };
 
 type EvalProjectModel = string | LanguageModel;
@@ -141,7 +146,8 @@ export async function runEvalProject(
   const evalDir = join(rootDir, relativeDir);
   const config = await loadConfig(resolveConfigPath(evalDir, relativeDir));
   const judgeModel = options?.judgeModel ?? process.env.MCP_EVAL_JUDGE_MODEL ?? config.judgeModel;
-  const tasks = loadTasks(evalDir, relativeDir);
+  const loaded = loadTasks(evalDir, relativeDir);
+  const tasks = selectTasks(loaded, { task: options?.task, limit: options?.limit });
   const models = options?.model !== undefined
     ? [options.model]
     : Array.isArray(config.model)
@@ -151,18 +157,49 @@ export async function runEvalProject(
     throw new Error('model is empty');
   }
 
+  const reporter = options?.reporter;
+  const mcpLabel = 'url' in config.mcp ? String(config.mcp.url) : 'transport';
+  const modelLabel = (entry: EvalProjectModel): string =>
+    typeof entry === 'string' ? entry : 'custom';
+  const headerInfo = (model: string) => ({
+    model,
+    ...(typeof judgeModel === 'string' ? { judge: judgeModel } : {}),
+    mcp: mcpLabel,
+    tasks: tasks.length,
+  });
+
+  reporter?.onRunStart(headerInfo(modelLabel(models[0])));
+  reporter?.onPhase('Connecting to MCP');
+
   const session = await toolsFromMcp(config.mcp);
   try {
+    reporter?.onPhase(`MCP connected, ${Object.keys(session.tools).length} tools`);
     const results: EvalRunResult[] = [];
-    for (const entry of models) {
-      results.push(
-        await runEvals({
-          model: entry,
-          tools: session.tools,
-          tasks,
-          judgeModel,
-        }),
-      );
+    for (const [modelIndex, entry] of models.entries()) {
+      if (modelIndex > 0) {
+        reporter?.onRunStart(headerInfo(modelLabel(entry)));
+      }
+      const result = await runEvals({
+        model: entry,
+        tools: session.tools,
+        tasks,
+        judgeModel,
+        ...(reporter === undefined
+          ? {}
+          : {
+              onTaskStart(task, index, total) {
+                reporter.onTaskStart({ index, total, name: task.name });
+              },
+              onTaskEnd(taskResult, index, total) {
+                reporter.onTaskEnd(taskResult, { index, total });
+              },
+            }),
+      });
+      reporter?.onRunEnd(result, {
+        threshold: config.threshold,
+        durationMs: result.results.reduce((sum, item) => sum + item.durationMs, 0),
+      });
+      results.push(result);
     }
 
     for (const result of results) {
