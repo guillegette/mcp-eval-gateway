@@ -35,6 +35,7 @@ function task(overrides: Partial<TaskResult> & Pick<TaskResult, 'name'>): TaskRe
     numToolCalls: 0,
     summary: null,
     feedback: null,
+    transcript: [],
     ...overrides,
   };
 }

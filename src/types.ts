@@ -1,3 +1,5 @@
+import type { TranscriptEntry } from './judge';
+
 export type EvalTask = {
   name: string;
   prompt: string;
@@ -25,6 +27,7 @@ export type TaskResult = {
   numToolCalls: number;
   summary: string | null;
   feedback: string | null;
+  transcript: TranscriptEntry[];
 };
 
 export type EvalRunResult = {

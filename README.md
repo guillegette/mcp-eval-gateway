@@ -137,6 +137,34 @@ Set `required` to `true` when a failed task must fail the run.
   judge: A new space is created and three tasks are created in it
 ```
 
+### Generate tasks with an agent
+
+Good tasks measure whether the model picks the right tools with the right arguments, not whether it knows your API. You can delegate the drafting to a coding agent that has access to your MCP server's source. Give it the following prompt:
+
+```text
+Write eval tasks in eval/tasks.yaml for the MCP server in this repo.
+Each task is a prompt given to an agent connected to the server, scored on the tool-call transcript.
+A task has `name`, `prompt`, and exactly one of `expected` (exact string match) or `judge` (a plain-English outcome that a judge model checks against the transcript).
+
+Read the server's tools first, then follow these rules:
+
+- Write prompts the way a real user of the product would type them. Product vocabulary only — never tool names, parameter names, or raw internal IDs.
+- Identifiers, codes, and URLs in prompts must match the product's real formats. Synthetic-looking values distort model behavior.
+- Put all precision in the judge and keep prompts natural. Use `expected` only when there is one deterministic short answer.
+- Score tool and argument choice, not the API. Don't ask the agent to verify its own writes; the judge sees the tool calls.
+- If a prompt names data that might not exist, judge both branches: act on what the lookups found, or clearly report that it doesn't exist.
+- Add a few tasks with realistic but nonexistent identifiers, judged on an honest "not found" with nothing invented.
+- Cover every tool through realistic scenarios, favoring multi-step workflows. Cover reads with genuine questions, not verification chores.
+- The agent can't ask questions, so include the specifics a user would give.
+- Writes are real: the evals run against a live workspace.
+```
+
+Expect to iterate after the first run. Judge explanations name what failed and why, and they separate model mistakes from server bugs: a run where the model picks the right tool but every call fails points at the server, not the task. To rerun a single task while you tune it, filter by name and print its transcript:
+
+```bash
+npx mcp-eval-gateway --task task-name --limit 1 --verbose
+```
+
 ## Run the evals
 
 The default config uses a `gateway/` model (see [Choose models](#choose-models)), which needs `AI_GATEWAY_API_KEY`. Store it in a `.env` file in the project root, next to any values your config reads:
@@ -152,11 +180,13 @@ Then start the runner from the project root:
 npx mcp-eval-gateway
 ```
 
-The runner loads `.env` when that file exists, then loads the config and `eval/tasks.yaml`. It picks the first of `config.ts`, `config.mts`, `config.mjs`, or `config.js` that exists. It evaluates every `model` in the config in one MCP session, writes a Markdown report, and exits with status 1 if any model fails `threshold` or a `required` task.
+The runner loads `.env` when that file exists, then loads the config and `eval/tasks.yaml`. It picks the first of `config.ts`, `config.mts`, `config.mjs`, or `config.js` that exists. It evaluates every `model` in the config in one MCP session and exits with status 1 if any model fails `threshold` or a `required` task.
+
+The runner prints progress lines as it goes: a header with the model, MCP URL, and task count; a connecting line; `RUN` then `PASS` or `FAIL` for each task; and a summary at the end. When GitHub provides `GITHUB_STEP_SUMMARY`, the runner still writes the Markdown report there.
 
 ## CLI flags
 
-Each flag takes one value. The following table describes the flags:
+The following table describes the flags:
 
 | Flag | Purpose | Default |
 | --- | --- | --- |
@@ -164,6 +194,9 @@ Each flag takes one value. The following table describes the flags:
 | `--env-file ENV_FILE` | Env file to load instead of `.env` | Load `.env` when that file exists |
 | `--model MODEL` | Run this model only, even if it is not in the config list | Run every `model` in the config |
 | `--judge-model MODEL` | Model that scores tasks with `judge` | The model under evaluation |
+| `--task NAME` | Run tasks whose `name` contains this substring. Repeat the flag to OR patterns. | Run every task |
+| `--limit N` | Run the first N tasks after `--task` filtering, in yaml order | Run every remaining task |
+| `--verbose` | After each task's `PASS`/`FAIL` line, print that task's tool transcript (tool name, input, output) | Off |
 
 The following command evaluates one model and loads config from `src/eval`:
 
@@ -172,6 +205,12 @@ npx mcp-eval-gateway \
   --dir src/eval \
   --env-file .env.local \
   --model gateway/anthropic/claude-sonnet-4-6
+```
+
+To run one matching task and print its tool transcript:
+
+```bash
+npx mcp-eval-gateway --task task-name --limit 1 --verbose
 ```
 
 If `--env-file` points at a missing file, the runner exits with an error. Values already set in the process environment are not overwritten when an env file is loaded.

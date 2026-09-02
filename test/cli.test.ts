@@ -38,6 +38,38 @@ const pingTasksYaml = `- name: ping
   expected: pong
 `;
 
+const multiTasksYaml = `- name: ping
+  prompt: hi
+  expected: pong
+- name: url-paste-space
+  prompt: hi
+  expected: ok
+- name: url-paste-task-panel
+  prompt: hi
+  expected: ok
+`;
+
+const defaultConfig = `export default { model: 'gateway/x', mcp: { url: 'http://localhost/mcp' } };
+`;
+
+type RunEvalCallbacks = {
+  onTaskStart?: unknown;
+  onTaskEnd?: unknown;
+  tasks: Array<{ name: string }>;
+};
+
+type RunEvalProjectFilterOptions = NonNullable<Parameters<typeof runEvalProject>[1]> & {
+  task?: string[];
+  limit?: number;
+  reporter?: {
+    onRunStart: ReturnType<typeof vi.fn>;
+    onPhase: ReturnType<typeof vi.fn>;
+    onTaskStart: ReturnType<typeof vi.fn>;
+    onTaskEnd: ReturnType<typeof vi.fn>;
+    onRunEnd: ReturnType<typeof vi.fn>;
+  };
+};
+
 let close: ReturnType<typeof vi.fn<() => Promise<void>>>;
 
 afterEach(() => {
@@ -521,4 +553,124 @@ describe('runEvalProject', () => {
       }),
     );
   });
+
+  it('filters tasks by --task substring before calling runEvals', async () => {
+    const rootDir = tempRoot();
+    writeEvalFile(rootDir, 'config.mjs', defaultConfig);
+    writeTasks(rootDir, multiTasksYaml);
+
+    await runEvalProject(rootDir, { task: ['url-paste'] } as RunEvalProjectFilterOptions);
+
+    const evalTasks = vi.mocked(runEvals).mock.calls[0]?.[0]?.tasks;
+    expect(evalTasks?.map((item) => item.name)).toEqual([
+      'url-paste-space',
+      'url-paste-task-panel',
+    ]);
+  });
+
+  it('limits to the first yaml task when only --limit is set', async () => {
+    const rootDir = tempRoot();
+    writeEvalFile(rootDir, 'config.mjs', defaultConfig);
+    writeTasks(rootDir, multiTasksYaml);
+
+    await runEvalProject(rootDir, { limit: 1 } as RunEvalProjectFilterOptions);
+
+    const evalTasks = vi.mocked(runEvals).mock.calls[0]?.[0]?.tasks;
+    expect(evalTasks?.map((item) => item.name)).toEqual(['ping']);
+  });
+
+  it('applies --limit after the --task filter', async () => {
+    const rootDir = tempRoot();
+    writeEvalFile(rootDir, 'config.mjs', defaultConfig);
+    writeTasks(rootDir, multiTasksYaml);
+
+    await runEvalProject(rootDir, {
+      task: ['url-paste'],
+      limit: 1,
+    } as RunEvalProjectFilterOptions);
+
+    const evalTasks = vi.mocked(runEvals).mock.calls[0]?.[0]?.tasks;
+    expect(evalTasks?.map((item) => item.name)).toEqual(['url-paste-space']);
+  });
+
+  it('rejects an unmatched --task before connecting to MCP', async () => {
+    const rootDir = tempRoot();
+    writeEvalFile(rootDir, 'config.mjs', defaultConfig);
+    writeTasks(rootDir, multiTasksYaml);
+
+    await expect(
+      runEvalProject(rootDir, { task: ['nope'] } as RunEvalProjectFilterOptions),
+    ).rejects.toThrow();
+    expect(toolsFromMcp).not.toHaveBeenCalled();
+  });
+
+  it('emits onPhase with MCP before the session connects', async () => {
+    const rootDir = tempRoot();
+    writeEvalFile(rootDir, 'config.mjs', defaultConfig);
+    writeTasks(rootDir, multiTasksYaml);
+
+    let releaseConnect!: () => void;
+    const connectGate = new Promise<void>((resolve) => {
+      releaseConnect = resolve;
+    });
+    vi.mocked(toolsFromMcp).mockImplementation(async () => {
+      await connectGate;
+      return { tools: { ping: {} } as never, close };
+    });
+
+    const reporter = {
+      onRunStart: vi.fn(),
+      onPhase: vi.fn(),
+      onTaskStart: vi.fn(),
+      onTaskEnd: vi.fn(),
+      onRunEnd: vi.fn(),
+    };
+
+    const runPromise = runEvalProject(rootDir, { reporter } as RunEvalProjectFilterOptions);
+
+    try {
+      await vi.waitFor(() => {
+        expect(reporter.onPhase).toHaveBeenCalledWith(expect.stringMatching(/MCP/i));
+      });
+      expect(reporter.onRunStart).toHaveBeenCalled();
+      expect(reporter.onRunStart.mock.calls[0]?.[0]).toEqual(
+        expect.objectContaining({ tasks: 3 }),
+      );
+    } finally {
+      releaseConnect();
+      await runPromise;
+    }
+  });
+
+  it('forwards reporter task callbacks into runEvals', async () => {
+    const rootDir = tempRoot();
+    writeEvalFile(rootDir, 'config.mjs', defaultConfig);
+    writeTasks(rootDir, multiTasksYaml);
+
+    const reporter = {
+      onRunStart: vi.fn(),
+      onPhase: vi.fn(),
+      onTaskStart: vi.fn(),
+      onTaskEnd: vi.fn(),
+      onRunEnd: vi.fn(),
+    };
+
+    await runEvalProject(rootDir, { reporter } as RunEvalProjectFilterOptions);
+
+    const opts = vi.mocked(runEvals).mock.calls[0]?.[0] as RunEvalCallbacks | undefined;
+    expect(typeof opts?.onTaskStart).toBe('function');
+    expect(typeof opts?.onTaskEnd).toBe('function');
+  });
+
+  it('does not pass task callbacks into runEvals without a reporter', async () => {
+    const rootDir = tempRoot();
+    writeEvalFile(rootDir, 'config.mjs', defaultConfig);
+    writeTasks(rootDir);
+
+    await runEvalProject(rootDir);
+
+    const opts = vi.mocked(runEvals).mock.calls[0]?.[0] as RunEvalCallbacks | undefined;
+    expect(opts?.onTaskStart).toBeUndefined();
+  });
 });
+

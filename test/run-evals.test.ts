@@ -47,6 +47,7 @@ describe('runEvals', () => {
     expect(result.results[0]?.passed).toBe(true);
     expect(result.results[0]?.summary).toBe('did math');
     expect(result.results[0]?.feedback).toBe('tool was fine');
+    expect(result.results[0]?.transcript).toEqual([]);
   });
 
   it('mismatch fails', async () => {
@@ -111,6 +112,12 @@ describe('runEvals', () => {
     expect(metrics?.durationsMs[0]).toBeGreaterThanOrEqual(0);
     expect(result.results[0]?.numToolCalls).toBe(1);
     expect(result.results[0]?.passed).toBe(true);
+
+    const transcript = result.results[0]?.transcript;
+    expect(transcript).toHaveLength(1);
+    expect(transcript?.[0]?.tool).toBe('calculator');
+    expect(transcript?.[0]?.input).toEqual({ expression: '6*7' });
+    expect(String(transcript?.[0]?.output)).toContain('42');
   });
 
   it('tool execute errors continue the loop with an error result string', async () => {
@@ -140,6 +147,12 @@ describe('runEvals', () => {
         (text) => text.startsWith('Error executing tool calculator:') && text.includes('boom'),
       ),
     ).toBe(true);
+
+    const transcript = result.results[0]?.transcript;
+    expect(transcript).toHaveLength(1);
+    expect(transcript?.[0]?.tool).toBe('calculator');
+    expect(String(transcript?.[0]?.output)).toContain('Error executing tool calculator');
+    expect(String(transcript?.[0]?.output)).toContain('boom');
   });
 
   it('task-level scorer overrides the default', async () => {
@@ -219,6 +232,62 @@ describe('runEvals', () => {
     expect(result.report).toContain('blue');
     expect(result.report).toContain('✅');
     expect(result.report).toContain('❌');
+  });
+
+  it('fires onTaskStart before onTaskEnd for a single passing task', async () => {
+    const onTaskStart = vi.fn();
+    const onTaskEnd = vi.fn();
+    const order: string[] = [];
+    onTaskStart.mockImplementation(() => {
+      order.push('start');
+    });
+    onTaskEnd.mockImplementation(() => {
+      order.push('end');
+    });
+
+    await runEvals({
+      model: textModel('<response>42</response>'),
+      tools: {},
+      tasks: [{ name: 'answer-42', prompt: 'What is 6*7?', expected: '42' }],
+      onTaskStart,
+      onTaskEnd,
+    } as Parameters<typeof runEvals>[0]);
+
+    expect(onTaskStart).toHaveBeenCalledTimes(1);
+    expect(onTaskEnd).toHaveBeenCalledTimes(1);
+    expect(order).toEqual(['start', 'end']);
+
+    const startArgs = onTaskStart.mock.calls[0];
+    expect(startArgs?.[0]?.name).toBe('answer-42');
+    expect(startArgs?.[1]).toBe(0);
+    expect(startArgs?.[2]).toBe(1);
+
+    const endArgs = onTaskEnd.mock.calls[0];
+    expect(endArgs?.[0]?.name).toBe('answer-42');
+    expect(endArgs?.[0]?.passed).toBe(true);
+    expect(endArgs?.[1]).toBe(0);
+    expect(endArgs?.[2]).toBe(1);
+  });
+
+  it('runs start and end callbacks in task order for two tasks', async () => {
+    const calls: string[] = [];
+
+    await runEvals({
+      model: textModel('<response>42</response>'),
+      tools: {},
+      tasks: [
+        { name: 'a', prompt: 'first', expected: '42' },
+        { name: 'b', prompt: 'second', expected: '42' },
+      ],
+      onTaskStart: (evalTask: EvalTask) => {
+        calls.push(`start:${evalTask.name}`);
+      },
+      onTaskEnd: (result: { name: string }) => {
+        calls.push(`end:${result.name}`);
+      },
+    } as Parameters<typeof runEvals>[0]);
+
+    expect(calls).toEqual(['start:a', 'end:a', 'start:b', 'end:b']);
   });
 });
 
