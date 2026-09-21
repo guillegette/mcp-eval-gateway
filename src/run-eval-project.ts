@@ -4,6 +4,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { extname, isAbsolute, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { parse } from 'yaml';
+import { EVALUATION_PROMPT } from './evaluation-prompt';
 import { toolsFromMcp, type ToolsFromMcpOptions } from './mcp-tools';
 import type { EvalReporter } from './reporter';
 import { runEvals } from './run-evals';
@@ -35,7 +36,30 @@ type EvalProjectConfig = {
   judgeModel?: string;
   threshold?: number;
   mcp: ToolsFromMcpOptions;
+  systemPrompt?: string;
+  before?: () => void | Promise<void>;
+  after?: () => void | Promise<void>;
 };
+
+async function runAfterHook(
+  after: EvalProjectConfig['after'],
+  results: EvalRunResult[],
+  reporter: EvalReporter | undefined,
+): Promise<void> {
+  if (after === undefined) {
+    return;
+  }
+  try {
+    await after();
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    const warning = `Warning: after() failed: ${message}`;
+    reporter?.onPhase(warning);
+    for (const result of results) {
+      result.report = `${result.report}\n\n${warning}`;
+    }
+  }
+}
 
 function loadEnv(rootDir: string, options?: RunEvalProjectOptions): void {
   const envFile = options?.envFile;
@@ -172,9 +196,11 @@ export async function runEvalProject(
   reporter?.onPhase('Connecting to MCP');
 
   const session = await toolsFromMcp(config.mcp);
+  reporter?.onPhase(`MCP connected, ${Object.keys(session.tools).length} tools`);
+  const results: EvalRunResult[] = [];
+  let runError: unknown;
   try {
-    reporter?.onPhase(`MCP connected, ${Object.keys(session.tools).length} tools`);
-    const results: EvalRunResult[] = [];
+    await config.before?.();
     for (const [modelIndex, entry] of models.entries()) {
       if (modelIndex > 0) {
         reporter?.onRunStart(headerInfo(modelLabel(entry)));
@@ -184,6 +210,9 @@ export async function runEvalProject(
         tools: session.tools,
         tasks,
         judgeModel,
+        ...(config.systemPrompt === undefined
+          ? {}
+          : { systemPrompt: `${config.systemPrompt}\n\n${EVALUATION_PROMPT}` }),
         ...(reporter === undefined
           ? {}
           : {
@@ -201,27 +230,33 @@ export async function runEvalProject(
       });
       results.push(result);
     }
-
-    for (const result of results) {
-      writeGitHubSummary(result);
-    }
-
-    const assertOptions =
-      config.threshold === undefined ? undefined : { threshold: config.threshold };
-    const assertErrors: Error[] = [];
-    for (const result of results) {
-      try {
-        assertEvalResult(result, assertOptions);
-      } catch (err) {
-        assertErrors.push(err instanceof Error ? err : new Error(String(err)));
-      }
-    }
-    if (assertErrors.length > 0) {
-      throw new Error(assertErrors.map((err) => err.message).join('\n'));
-    }
-
-    return results[results.length - 1];
+  } catch (err) {
+    runError = err;
   } finally {
+    await runAfterHook(config.after, results, reporter);
     await session.close();
   }
+  if (runError !== undefined) {
+    throw runError;
+  }
+
+  for (const result of results) {
+    writeGitHubSummary(result);
+  }
+
+  const assertOptions =
+    config.threshold === undefined ? undefined : { threshold: config.threshold };
+  const assertErrors: Error[] = [];
+  for (const result of results) {
+    try {
+      assertEvalResult(result, assertOptions);
+    } catch (err) {
+      assertErrors.push(err instanceof Error ? err : new Error(String(err)));
+    }
+  }
+  if (assertErrors.length > 0) {
+    throw new Error(assertErrors.map((err) => err.message).join('\n'));
+  }
+
+  return results[results.length - 1];
 }

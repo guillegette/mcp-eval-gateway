@@ -165,6 +165,45 @@ Expect to iterate after the first run. Judge explanations name what failed and w
 npx mcp-eval-gateway --task task-name --limit 1 --verbose
 ```
 
+## Set a system prompt
+
+`systemPrompt` on `eval/config.ts` is extra system text placed above `EVALUATION_PROMPT` for every task. The evaluation prompt (tool-use rules and `<response>` / `<summary>` / `<feedback>` tags) always stays. When `systemPrompt` is omitted, the runner sends `EVALUATION_PROMPT` alone.
+
+```ts
+export default {
+  model: 'gateway/anthropic/claude-sonnet-4-6',
+  threshold: 0.8,
+  systemPrompt: `You are a helpful assistant. The current date and time is ${new Date().toISOString()}.`,
+  mcp: {
+    url: 'http://localhost/mcp',
+    headers: { Authorization: `Bearer ${process.env.MCP_API_KEY}` },
+  },
+};
+```
+
+The model sees that text first, then a blank line, then `EVALUATION_PROMPT`.
+
+## Add suite hooks
+
+`before` and `after` on `eval/config.ts` are optional async functions. The runner calls `before` once after it connects to MCP and before it runs any model. It calls `after` once after every model finishes, and also when `before` throws or a model run throws. A throw from `before` stops the suite and fails the run. A throw from `after` is reported as `Warning: after() failed: …` on the console and on the Markdown report; the runner still writes the report and still scores the suite.
+
+```ts
+export default {
+  model: 'gateway/anthropic/claude-sonnet-4-6',
+  threshold: 0.8,
+  mcp: {
+    url: 'http://localhost/mcp',
+    headers: { Authorization: `Bearer ${process.env.MCP_API_KEY}` },
+  },
+  async before() {
+    // seed or reset workspace data
+  },
+  async after() {
+    // clean up data created by the suite
+  },
+};
+```
+
 ## Run the evals
 
 The default config uses a `gateway/` model (see [Choose models](#choose-models)), which needs `AI_GATEWAY_API_KEY`. Store it in a `.env` file in the project root, next to any values your config reads:
@@ -299,7 +338,7 @@ try {
 The following exports are available:
 
 - `initEvalProject(rootDir, options)`: create `config.ts` and `tasks.yaml` in the eval folder. `options` can include `dir`.
-- `runEvalProject(rootDir, options)`: load a project folder and run the same path as the CLI. `options` can include `dir`, `envFile`, and `model`.
+- `runEvalProject(rootDir, options)`: load a project folder and run the same path as the CLI. `options` can include `dir`, `envFile`, and `model`. The loaded config can include `systemPrompt`, `before`, and `after`.
 - `runEvals(options)`: run tasks against an existing tool set. Pass `model`, `tools`, and `tasks`. You can also pass `maxSteps`, `systemPrompt`, and `scorer`.
 - `toolsFromMcp(options)`: connect to an MCP server and build tools. See the [*toolsFromMcp*](#toolsfrommcp) section of this document.
 - `assertEvalResult(result, options)`: throw when a required task fails or accuracy is below `threshold`.
