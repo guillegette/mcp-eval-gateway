@@ -1,7 +1,8 @@
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { EVALUATION_PROMPT } from '../src/evaluation-prompt';
 import { toolsFromMcp } from '../src/mcp-tools';
 import { runEvals } from '../src/run-evals';
 import { assertEvalResult, writeGitHubSummary } from '../src/threshold';
@@ -130,6 +131,31 @@ const envAwareConfig = `export default {
 
 const arrayModelConfig = `export default { model: ['gateway/a', 'gateway/b'], mcp: { url: 'http://localhost/mcp' } };
 `;
+
+const afterThrowsConfig = `export default {
+  model: 'gateway/x',
+  mcp: { url: 'http://localhost/mcp' },
+  async after() {
+    throw new Error('cleanup failed');
+  },
+};
+`;
+
+function loggingHooksConfig(logPath: string, model = `'gateway/x'`): string {
+  const pathLiteral = JSON.stringify(logPath);
+  return `import { appendFileSync } from 'node:fs';
+export default {
+  model: ${model},
+  mcp: { url: 'http://localhost/mcp' },
+  async before() {
+    appendFileSync(${pathLiteral}, 'before\\n');
+  },
+  async after() {
+    appendFileSync(${pathLiteral}, 'after\\n');
+  },
+};
+`;
+}
 
 function writeTasks(rootDir: string, yaml = pingTasksYaml): void {
   writeEvalFile(rootDir, 'tasks.yaml', yaml);
@@ -671,6 +697,177 @@ describe('runEvalProject', () => {
 
     const opts = vi.mocked(runEvals).mock.calls[0]?.[0] as RunEvalCallbacks | undefined;
     expect(opts?.onTaskStart).toBeUndefined();
+  });
+
+  it('runs before, then runEvals, then after', async () => {
+    const rootDir = tempRoot();
+    const logPath = join(rootDir, 'hooks.log');
+    writeFileSync(logPath, '');
+    writeEvalFile(rootDir, 'config.mjs', loggingHooksConfig(logPath));
+    writeTasks(rootDir);
+    vi.mocked(runEvals).mockImplementation(async () => {
+      appendFileSync(logPath, 'evals\n');
+      return evalRunResult;
+    });
+
+    await runEvalProject(rootDir);
+
+    expect(readFileSync(logPath, 'utf8')).toBe('before\nevals\nafter\n');
+    expect(close).toHaveBeenCalledTimes(1);
+  });
+
+  it('runs before and after once for a model array', async () => {
+    const rootDir = tempRoot();
+    const logPath = join(rootDir, 'hooks.log');
+    writeFileSync(logPath, '');
+    writeEvalFile(
+      rootDir,
+      'config.mjs',
+      loggingHooksConfig(logPath, `['gateway/a', 'gateway/b']`),
+    );
+    writeTasks(rootDir);
+    vi.mocked(runEvals).mockImplementation(async () => {
+      appendFileSync(logPath, 'evals\n');
+      return evalRunResult;
+    });
+
+    await runEvalProject(rootDir);
+
+    expect(readFileSync(logPath, 'utf8')).toBe('before\nevals\nevals\nafter\n');
+    expect(runEvals).toHaveBeenCalledTimes(2);
+  });
+
+  it('stops the run when before throws and still runs after', async () => {
+    const rootDir = tempRoot();
+    const logPath = join(rootDir, 'hooks.log');
+    writeFileSync(logPath, '');
+    const pathLiteral = JSON.stringify(logPath);
+    writeEvalFile(
+      rootDir,
+      'config.mjs',
+      `import { appendFileSync } from 'node:fs';
+export default {
+  model: 'gateway/x',
+  mcp: { url: 'http://localhost/mcp' },
+  async before() {
+    throw new Error('setup failed');
+  },
+  async after() {
+    appendFileSync(${pathLiteral}, 'after\\n');
+  },
+};
+`,
+    );
+    writeTasks(rootDir);
+
+    await expect(runEvalProject(rootDir)).rejects.toThrow('setup failed');
+    expect(runEvals).not.toHaveBeenCalled();
+    expect(writeGitHubSummary).not.toHaveBeenCalled();
+    expect(readFileSync(logPath, 'utf8')).toBe('after\n');
+    expect(close).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not hide a before error when after also throws', async () => {
+    const rootDir = tempRoot();
+    writeEvalFile(
+      rootDir,
+      'config.mjs',
+      `export default {
+  model: 'gateway/x',
+  mcp: { url: 'http://localhost/mcp' },
+  async before() {
+    throw new Error('setup failed');
+  },
+  async after() {
+    throw new Error('cleanup failed');
+  },
+};
+`,
+    );
+    writeTasks(rootDir);
+
+    await expect(runEvalProject(rootDir)).rejects.toThrow('setup failed');
+    expect(runEvals).not.toHaveBeenCalled();
+  });
+
+  it('warns when after throws and still ships the report', async () => {
+    const rootDir = tempRoot();
+    writeEvalFile(rootDir, 'config.mjs', afterThrowsConfig);
+    writeTasks(rootDir);
+
+    await runEvalProject(rootDir);
+
+    expect(runEvals).toHaveBeenCalled();
+    expect(writeGitHubSummary).toHaveBeenCalled();
+    expect(assertEvalResult).toHaveBeenCalled();
+    expect(close).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(writeGitHubSummary).mock.calls[0]?.[0]?.report).toContain(
+      'Warning: after() failed: cleanup failed',
+    );
+  });
+
+  it('prints an after throw on the reporter', async () => {
+    const rootDir = tempRoot();
+    writeEvalFile(rootDir, 'config.mjs', afterThrowsConfig);
+    writeTasks(rootDir);
+    const reporter = {
+      onRunStart: vi.fn(),
+      onPhase: vi.fn(),
+      onTaskStart: vi.fn(),
+      onTaskEnd: vi.fn(),
+      onRunEnd: vi.fn(),
+    };
+
+    await runEvalProject(rootDir, { reporter } as RunEvalProjectFilterOptions);
+
+    expect(reporter.onPhase).toHaveBeenCalledWith(
+      expect.stringContaining('Warning: after() failed: cleanup failed'),
+    );
+  });
+
+  it('still runs after when runEvals rejects', async () => {
+    const rootDir = tempRoot();
+    const logPath = join(rootDir, 'hooks.log');
+    writeFileSync(logPath, '');
+    writeEvalFile(rootDir, 'config.mjs', loggingHooksConfig(logPath));
+    writeTasks(rootDir);
+    vi.mocked(runEvals).mockImplementation(async () => {
+      appendFileSync(logPath, 'evals\n');
+      throw new Error('model blew up');
+    });
+
+    await expect(runEvalProject(rootDir)).rejects.toThrow('model blew up');
+    expect(readFileSync(logPath, 'utf8')).toBe('before\nevals\nafter\n');
+    expect(close).toHaveBeenCalledTimes(1);
+  });
+
+  it('sits systemPrompt above EVALUATION_PROMPT', async () => {
+    const rootDir = tempRoot();
+    writeEvalFile(
+      rootDir,
+      'config.mjs',
+      `export default { model: 'gateway/x', systemPrompt: 'You are the Workast assistant.', mcp: { url: 'http://localhost/mcp' } };
+`,
+    );
+    writeTasks(rootDir);
+
+    await runEvalProject(rootDir);
+
+    expect(runEvals).toHaveBeenCalledWith(
+      expect.objectContaining({
+        systemPrompt: `You are the Workast assistant.\n\n${EVALUATION_PROMPT}`,
+      }),
+    );
+  });
+
+  it('does not pass systemPrompt when the config omits it', async () => {
+    const rootDir = tempRoot();
+    writeEvalFile(rootDir, 'config.mjs', defaultConfig);
+    writeTasks(rootDir);
+
+    await runEvalProject(rootDir);
+
+    expect(vi.mocked(runEvals).mock.calls[0]?.[0]?.systemPrompt).toBeUndefined();
   });
 });
 
