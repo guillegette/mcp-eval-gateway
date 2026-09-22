@@ -23,16 +23,6 @@ reply with text.`;
 
 type Verdict = { verdict: 'yes' | 'no'; reason: string };
 
-const MAX_OUTPUT_CHARS = 8000;
-
-function truncateOutput(output: unknown): unknown {
-  const serialized = JSON.stringify(output);
-  if (serialized === undefined || serialized.length <= MAX_OUTPUT_CHARS) {
-    return output;
-  }
-  return `${serialized.slice(0, MAX_OUTPUT_CHARS)} [truncated]`;
-}
-
 const verdictInputSchema = jsonSchema<Verdict>({
   type: 'object',
   properties: {
@@ -59,14 +49,7 @@ export async function runJudge(options: {
         `## Expected outcome`,
         options.task.judge ?? '',
         `## Tool transcript`,
-        JSON.stringify(
-          options.transcript.map((entry) => ({
-            ...entry,
-            output: truncateOutput(entry.output),
-          })),
-          null,
-          2,
-        ),
+        JSON.stringify(options.transcript, null, 2),
         `## Final response`,
         options.actual ?? '(no response tag)',
       ].join('\n\n'),

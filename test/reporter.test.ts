@@ -199,6 +199,20 @@ describe('formatTranscript', () => {
     expect(line).toContain('Launch');
     expect(line).toContain('validation failed');
   });
+
+  it('includes an oversized tool output in full', () => {
+    const blob = `${'x'.repeat(60000)}END_MARKER`;
+    const line = formatTranscript([
+      {
+        tool: 'create_task',
+        input: { text: 'Buy milk' },
+        output: { id: 'task-9', blob },
+      },
+    ]);
+    expectPlain(line);
+    expect(line).toContain('create_task');
+    expect(line).toContain(blob);
+  });
 });
 
 describe('createReporter', () => {

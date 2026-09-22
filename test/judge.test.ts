@@ -162,8 +162,8 @@ describe('runEvals judge tasks', () => {
     expect(strings.some((text) => text.includes('task created'))).toBe(true);
   });
 
-  it('oversized tool outputs are truncated for the judge', async () => {
-    const blob = 'x'.repeat(60000);
+  it('oversized tool outputs are sent in full to the judge', async () => {
+    const blob = `${'x'.repeat(60000)}END_MARKER`;
     const evalModel = toolThenTextModel(
       'create_task',
       { text: 'Buy milk' },
@@ -193,8 +193,7 @@ describe('runEvals judge tasks', () => {
     });
 
     const strings = collectStrings(prompts);
-    expect(strings.every((text) => !text.includes(blob))).toBe(true);
-    expect(strings.some((text) => text.includes('[truncated]'))).toBe(true);
+    expect(strings.some((text) => text.includes(blob))).toBe(true);
     expect(firstResult(result).passed).toBe(true);
   });
 
