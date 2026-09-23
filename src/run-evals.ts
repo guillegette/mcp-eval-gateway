@@ -182,6 +182,6 @@ export async function runEvals(options: RunEvalsOptions): Promise<EvalRunResult>
     correct,
     accuracy: correct / total,
     results,
-    report: renderReport(results),
+    report: renderReport(results, Object.keys(options.tools)),
   };
 }
