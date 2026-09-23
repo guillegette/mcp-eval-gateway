@@ -6,6 +6,7 @@ import {
   collectStrings,
   textGenerateResult,
   textModel,
+  toolCallGenerateResult,
   toolThenTextModel,
 } from './helpers';
 import { MockLanguageModelV3 } from 'ai/test';
@@ -232,6 +233,44 @@ describe('runEvals', () => {
     expect(result.report).toContain('blue');
     expect(result.report).toContain('✅');
     expect(result.report).toContain('❌');
+    expect(result.report).toContain('No tools were available.');
+    expect(result.report).not.toContain('Average Tool Calls');
+  });
+
+  it('report lists every tool and the tasks that called it', async () => {
+    let phase: 'tool' | 'text' = 'tool';
+    const model = new MockLanguageModelV3({
+      doGenerate: async () => {
+        if (phase === 'tool') {
+          phase = 'text';
+          return toolCallGenerateResult('calculator', { expression: '6*7' });
+        }
+        phase = 'tool';
+        return textGenerateResult('<response>42</response>');
+      },
+    });
+    const execute = vi.fn(async () => '42');
+
+    const result = await runEvals({
+      model,
+      tools: {
+        archive: calculatorTool(async () => 'unused'),
+        calculator: calculatorTool(execute),
+      },
+      tasks: [
+        { name: 'first', prompt: 'What is 6*7?', expected: '42' },
+        { name: 'second', prompt: 'What is 6*7 again?', expected: '42' },
+      ],
+    });
+
+    expect(execute).toHaveBeenCalledTimes(2);
+    expect(result.report).toContain('1/2 invoked (50.0%)');
+    expect(result.report).toContain('| Tool | Invoked | Tasks |');
+    expect(result.report).toContain('| `archive` | no |  |');
+    expect(result.report).toContain('| `calculator` | yes | `first`, `second` |');
+    expect(result.report).toContain('| first | ✅ | `calculator` |');
+    expect(result.report).toContain('| second | ✅ | `calculator` |');
+    expect(result.report).not.toContain('durationsMs');
   });
 
   it('fires onTaskStart before onTaskEnd for a single passing task', async () => {

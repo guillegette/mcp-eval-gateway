@@ -3,7 +3,11 @@
 [![npm version](https://img.shields.io/npm/v/mcp-eval-gateway.svg)](https://www.npmjs.com/package/mcp-eval-gateway)
 [![CI](https://github.com/guillegette/mcp-eval-gateway/actions/workflows/ci.yml/badge.svg)](https://github.com/guillegette/mcp-eval-gateway/actions/workflows/ci.yml)
 
-Run LLM tool-use evaluations against MCP servers with the [Vercel AI SDK](https://ai-sdk.dev/). The agent loop, tagged response extraction, scoring, and Markdown report follow the pattern in Anthropic's [tool evaluation cookbook](https://github.com/anthropics/anthropic-cookbook).
+Run an agent against your MCP server and score the tool calls.
+
+Each task in `eval/tasks.yaml` is a prompt. The runner connects to the server, records which tools the model calls, and scores the outcome. The report lists every tool the server exposed and whether the suite invoked it. In GitHub Actions, that report is the job summary, and the job fails when accuracy is less than `threshold` or a required task fails.
+
+The runner uses the [Vercel AI SDK](https://ai-sdk.dev/). The agent loop, tagged response extraction, and scoring follow Anthropic's [tool evaluation cookbook](https://github.com/anthropics/anthropic-cookbook).
 
 ## Get started
 
@@ -51,7 +55,7 @@ To write the files under a different folder:
 npx mcp-eval-gateway init --dir src/eval
 ```
 
-These files are a starting point. Point the config at your MCP server, write the tasks you want to evaluate, then run the evals. The next three sections cover each step.
+These files are a starting point. To evaluate your server, point the config at it, replace the sample task, and run the evals. The following sections walk through that path: [Connect the MCP server](#connect-the-mcp-server), [Write the tasks](#write-the-tasks), and [Run the evals](#run-the-evals). To fail a pull request on the result, see [Add the eval to CI](#add-the-eval-to-ci).
 
 ## Connect the MCP server
 
@@ -98,7 +102,7 @@ export default {
 
 ### Call an in-process handler
 
-Pass `fetch` that calls your route handler. No network hop. This is the Next.js App Router pattern.
+Pass a `fetch` function that calls your route handler. The handler runs in the same process, so the request does not go over the network. This is the Next.js App Router pattern.
 
 ```ts
 import { POST } from '../app/mcp/route.js';
@@ -165,9 +169,9 @@ Expect to iterate after the first run. Judge explanations name what failed and w
 npx mcp-eval-gateway --task task-name --limit 1 --verbose
 ```
 
-## Set a system prompt
+## Optional: Set a system prompt
 
-`systemPrompt` on `eval/config.ts` is extra system text placed above `EVALUATION_PROMPT` for every task. The evaluation prompt (tool-use rules and `<response>` / `<summary>` / `<feedback>` tags) always stays. When `systemPrompt` is omitted, the runner sends `EVALUATION_PROMPT` alone.
+`systemPrompt` on `eval/config.ts` is extra system text sent before `EVALUATION_PROMPT` on every task. The evaluation prompt (tool-use rules and `<response>` / `<summary>` / `<feedback>` tags) always stays. When `systemPrompt` is omitted, the runner sends `EVALUATION_PROMPT` alone.
 
 ```ts
 export default {
@@ -183,7 +187,7 @@ export default {
 
 The model sees that text first, then a blank line, then `EVALUATION_PROMPT`.
 
-## Add suite hooks
+## Optional: Add suite hooks
 
 `before` and `after` on `eval/config.ts` are optional async functions. The runner calls `before` once after it connects to MCP and before it runs any model. It calls `after` once after every model finishes, and also when `before` throws or a model run throws. A throw from `before` stops the suite and fails the run. A throw from `after` is reported as `Warning: after() failed: …` on the console and on the Markdown report; the runner still writes the report and still scores the suite.
 
@@ -219,9 +223,46 @@ Then start the runner from the project root:
 npx mcp-eval-gateway
 ```
 
-The runner loads `.env` when that file exists, then loads the config and `eval/tasks.yaml`. It picks the first of `config.ts`, `config.mts`, `config.mjs`, or `config.js` that exists. It evaluates every `model` in the config in one MCP session and exits with status 1 if any model fails `threshold` or a `required` task.
+The runner loads `.env` when that file exists, then loads the config and `eval/tasks.yaml`. It picks the first of `config.ts`, `config.mts`, `config.mjs`, or `config.js` that exists. It evaluates every `model` in the config in one MCP session.
 
-The runner prints progress lines as it goes: a header with the model, MCP URL, and task count; a connecting line; `RUN` then `PASS` or `FAIL` for each task; and a summary at the end. When GitHub provides `GITHUB_STEP_SUMMARY`, the runner still writes the Markdown report there.
+Accuracy is the number of passed tasks divided by the number of tasks that ran. A task passes when its score is 1. An `expected` task scores 1 on an exact match. A `judge` task scores 1 when the judge answers yes.
+
+`threshold: 0.8` means the run must reach 80%. The process exits with status 1 when accuracy is less than `threshold`, or when a `required` task fails. A required failure fails the run even when accuracy is high enough.
+
+The runner prints progress as it goes: a header with the model, MCP URL, and task count; a connecting line; `RUN`, then `PASS` or `FAIL`, for each task; and a summary line with the pass rate. With `--verbose`, each finished task also prints the tool name, input, and output of each call.
+
+The Markdown report is separate from those progress lines. Set `GITHUB_STEP_SUMMARY` to a file path, and the runner appends the report to that file. The report opens with accuracy and average duration, then a tool-coverage table: every tool the server exposed, whether any task invoked it, and which tasks those were. A pass/fail index of the tasks follows, then one section per task. GitHub Actions sets `GITHUB_STEP_SUMMARY` for the job. See [Add the eval to CI](#add-the-eval-to-ci).
+
+## Add the eval to CI
+
+Run the eval on every pull request. The job fails when accuracy is less than `threshold`, or when a `required` task fails, and the Markdown report is attached to the job summary.
+
+The job needs Node.js 22, the project dependencies, and the same credentials the local run uses. Store `AI_GATEWAY_API_KEY` and your server credential in the job environment. If a `.env` file is also present, values already set in the environment stay as they are.
+
+```yaml
+name: Eval
+
+on:
+  pull_request:
+
+jobs:
+  eval:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+      - run: npm ci
+      - name: Run MCP evals
+        run: npx mcp-eval-gateway
+        env:
+          AI_GATEWAY_API_KEY: ${{ secrets.AI_GATEWAY_API_KEY }}
+          MCP_API_KEY: ${{ secrets.MCP_API_KEY }}
+```
+
+Evals call a model for every task. Set `timeout-minutes` high enough for the full suite. For how accuracy is calculated, see the [Run the evals](#run-the-evals) section of this document.
 
 ## CLI flags
 
@@ -289,21 +330,7 @@ export default {
 };
 ```
 
-To run one model without editing the config, pass `--model` on the command line. A `LanguageModel` instance built in code is used as-is; strings are resolved through the table above.
-
-## Add a GitHub Actions step
-
-After checkout, Node.js 22 setup, and `npm ci`, add an eval step. Pass secrets through the job environment instead of a `.env` file:
-
-```yaml
-- name: Run MCP evals
-  run: npx mcp-eval-gateway
-  env:
-    AI_GATEWAY_API_KEY: ${{ secrets.AI_GATEWAY_API_KEY }}
-    MCP_API_KEY: ${{ secrets.MCP_API_KEY }}
-```
-
-When GitHub provides `GITHUB_STEP_SUMMARY`, the runner writes the Markdown report to the job summary. The step fails when accuracy is below `threshold` or when a `required` task fails.
+To run one model without editing the config, pass `--model` on the command line. A `LanguageModel` instance built in code is used as-is; strings are resolved through the preceding table.
 
 ## Call the library
 
@@ -341,7 +368,7 @@ The following exports are available:
 - `runEvalProject(rootDir, options)`: load a project folder and run the same path as the CLI. `options` can include `dir`, `envFile`, and `model`. The loaded config can include `systemPrompt`, `before`, and `after`.
 - `runEvals(options)`: run tasks against an existing tool set. Pass `model`, `tools`, and `tasks`. You can also pass `maxSteps`, `systemPrompt`, and `scorer`.
 - `toolsFromMcp(options)`: connect to an MCP server and build tools. See the [*toolsFromMcp*](#toolsfrommcp) section of this document.
-- `assertEvalResult(result, options)`: throw when a required task fails or accuracy is below `threshold`.
+- `assertEvalResult(result, options)`: throw when a required task fails or accuracy is less than `threshold`.
 - `resolveModel(model)`: turn a `PROVIDER/ID` string into a `LanguageModel`.
 - `writeGitHubSummary(result)`: append the report to `GITHUB_STEP_SUMMARY`. The CLI already does this.
 - `EVALUATION_PROMPT`: default system prompt for the agent loop.
